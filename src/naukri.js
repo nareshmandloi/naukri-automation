@@ -21,6 +21,19 @@ const SELECTORS = {
   loggedIn: ['.nI-gNb-drawer__bars', '.view-profile-wrapper', 'a[href*="/mnjuser/profile"]'],
 };
 
+/**
+ * A failure that retrying cannot fix — an OTP wall, a captcha, or rejected
+ * credentials. Retrying these just sends the user more OTP emails, so the
+ * runner gives up immediately when it sees one.
+ */
+export class PermanentFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PermanentFailure';
+    this.permanent = true;
+  }
+}
+
 /** Returns the first selector in `candidates` that is attached to the page. */
 async function firstMatch(page, candidates, { timeout = 20000 } = {}) {
   const deadline = Date.now() + timeout;
@@ -108,7 +121,7 @@ async function login(page, { email, password, artifactDir }) {
   } catch {
     const reason = (await diagnoseBlock(page)) ?? 'the credentials were rejected';
     await capture(page, 'login-failed', artifactDir);
-    throw new Error(`Login did not complete — Naukri showed ${reason}`);
+    throw new PermanentFailure(`Login did not complete — Naukri showed ${reason}`);
   }
 
   if (!(await firstMatch(page, SELECTORS.loggedIn, { timeout: 30000 }))) {
@@ -124,6 +137,14 @@ async function uploadResume(page, { filePath, fileName, artifactDir, dryRun }) {
     waitUntil: 'domcontentloaded',
     timeout: 60000,
   });
+
+  if (page.url().includes('/nlogin/') || page.url().includes('login')) {
+    await capture(page, 'session-expired', artifactDir);
+    throw new PermanentFailure(
+      'The saved session is no longer valid — Naukri redirected to the login page. ' +
+        'Re-capture it with `npm run session` and update the NAUKRI_SESSION_B64 secret.',
+    );
+  }
 
   const input = await firstMatch(page, SELECTORS.fileInput, { timeout: 30000 });
   if (!input) {
@@ -196,6 +217,7 @@ async function realisticUserAgent(browser) {
 export async function refreshResume({
   email,
   password,
+  sessionState,
   filePath,
   fileName,
   artifactDir,
@@ -216,6 +238,7 @@ export async function refreshResume({
     locale: 'en-IN',
     timezoneId: 'Asia/Kolkata',
     userAgent: await realisticUserAgent(browser),
+    ...(sessionState ? { storageState: sessionState } : {}),
   });
 
   // Strip the clearest automation tell before any page script runs.
@@ -227,8 +250,51 @@ export async function refreshResume({
   page.setDefaultTimeout(30000);
 
   try {
-    await login(page, { email, password, artifactDir });
+    if (sessionState) {
+      console.log('→ using saved session (no login, so no OTP challenge)');
+    } else {
+      await login(page, { email, password, artifactDir });
+    }
     return await uploadResume(page, { filePath, fileName, artifactDir, dryRun });
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+}
+
+/**
+ * Logs in from this machine and returns Playwright's storage state (cookies +
+ * localStorage). Run on a device Naukri already trusts, so the login succeeds
+ * without an OTP; the resulting state is what lets an untrusted runner skip
+ * the login form altogether.
+ */
+export async function captureSession({ email, password, artifactDir, headless = true }) {
+  const browser = await chromium.launch({
+    headless,
+    channel: 'chromium',
+    args: ['--disable-blink-features=AutomationControlled'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-IN',
+    timezoneId: 'Asia/Kolkata',
+    userAgent: await realisticUserAgent(browser),
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(30000);
+
+  try {
+    await login(page, { email, password, artifactDir });
+
+    // Visit the profile once so any cookies that page sets are captured too.
+    await page.goto(PROFILE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    if (!(await firstMatch(page, SELECTORS.fileInput, { timeout: 30000 }))) {
+      throw new Error('Logged in, but the profile page did not show the upload control');
+    }
+    return await context.storageState();
   } finally {
     await context.close();
     await browser.close();

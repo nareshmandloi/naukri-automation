@@ -64,6 +64,10 @@ jobs:
 
       - name: Refresh resume on Naukri
         env:
+          # Preferred: a session captured on a trusted device. Logging in from
+          # a GitHub runner's datacenter IP triggers Naukri's OTP challenge, so
+          # the run reuses this session instead of logging in at all.
+          NAUKRI_SESSION_B64: ${{ secrets.NAUKRI_SESSION_B64 }}
           NAUKRI_EMAIL: ${{ secrets.NAUKRI_EMAIL }}
           NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
           DRY_RUN: ${{ inputs.dry_run }}

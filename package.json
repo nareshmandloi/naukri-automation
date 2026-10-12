@@ -6,7 +6,9 @@
   "description": "Re-uploads my Naukri resume every 6 hours under an incrementing version name to keep the profile fresh.",
   "scripts": {
     "refresh": "node src/index.js",
-    "refresh:headed": "HEADLESS=false node src/index.js"
+    "refresh:headed": "HEADLESS=false node src/index.js",
+    "session": "node src/capture-session.js",
+    "session:headed": "HEADLESS=false node src/capture-session.js"
   },
   "engines": {
     "node": ">=20"

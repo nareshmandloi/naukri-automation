@@ -12,3 +12,5 @@ artifacts/
 # The resume carries personal contact details and this repo is public.
 # It lives only on your machine and in the RESUME_BASE64 Actions secret.
 resume/
+session.json
+session.b64
