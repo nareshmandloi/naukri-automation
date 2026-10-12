@@ -1,0 +1,14 @@
+# Credentials — never commit these
+.env
+.env.*
+!.env.example
+
+node_modules/
+
+# Run output: generated resume copies, screenshots, page dumps
+artifacts/
+*.log
+
+# The resume carries personal contact details and this repo is public.
+# It lives only on your machine and in the RESUME_BASE64 Actions secret.
+resume/

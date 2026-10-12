@@ -1,0 +1,17 @@
+{
+  "name": "naukri-automation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Re-uploads my Naukri resume every 6 hours under an incrementing version name to keep the profile fresh.",
+  "scripts": {
+    "refresh": "node src/index.js",
+    "refresh:headed": "HEADLESS=false node src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.64.0"
+  }
+}

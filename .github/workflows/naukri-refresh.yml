@@ -1,0 +1,102 @@
+name: Naukri Resume Refresh
+
+on:
+  schedule:
+    # Every 6 hours, on the hour (UTC). GitHub's shared runners frequently
+    # delay scheduled jobs by 10-60 minutes; this is expected, not a fault.
+    # 00:00/06:00/12:00/18:00 UTC == 05:30/11:30/17:30/23:30 IST.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log in and locate the upload field, but do not upload'
+        type: boolean
+        default: false
+
+# Needed to push the version-counter bump back to the repo.
+permissions:
+  contents: write
+
+# Never let a delayed run overlap a fresh one: two uploads at once would
+# race on the version counter.
+concurrency:
+  group: naukri-resume-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore resume from secret
+        env:
+          RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESUME_BASE64:-}" ]; then
+            echo "::error::RESUME_BASE64 secret is not set. See README > Setup."
+            exit 1
+          fi
+          mkdir -p resume
+          # tr strips any line wrapping introduced when pasting into the UI.
+          printf '%s' "$RESUME_BASE64" | tr -d '[:space:]' | base64 -d > resume/base.pdf
+          if [ "$(head -c 5 resume/base.pdf)" != "%PDF-" ]; then
+            echo "::error::RESUME_BASE64 did not decode to a PDF. Re-copy the secret."
+            exit 1
+          fi
+          echo "Restored resume/base.pdf ($(wc -c < resume/base.pdf) bytes)"
+
+      - name: Refresh resume on Naukri
+        env:
+          NAUKRI_EMAIL: ${{ secrets.NAUKRI_EMAIL }}
+          NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npm run refresh
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-diagnostics-${{ github.run_number }}
+          path: |
+            artifacts/*.png
+            artifacts/*.html
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Commit version bump
+        if: success()
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- state/version.json; then
+            echo "Version counter unchanged (dry run) — nothing to commit."
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add state/version.json
+          git commit -m "chore: resume uploaded as $(node -p "require('./state/version.json').lastUploadedName")"
+          # A delayed concurrent run may have pushed first; rebase rather than fail.
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "Push rejected (attempt $attempt) — rebasing on origin."
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          done
+          echo "::error::Could not push the version bump after 3 attempts."
+          exit 1
