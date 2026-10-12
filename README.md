@@ -26,15 +26,40 @@ This repo is **public**, so nothing personal is committed to it: the resume is
 gitignored and lives in a secret instead, and credentials never leave your
 machine.
 
-### 1. Add the three secrets
+### 1. Capture a login session
+
+Naukri uses risk-based authentication. From this Mac — a familiar IP and a
+device with login history — the password alone is accepted. From a GitHub
+runner's datacenter IP it is not: Naukri treats it as suspicious and demands an
+emailed OTP, which a scheduled job cannot answer.
+
+Naukri only challenges during **login**, so the job avoids logging in at all.
+Capture a session here, where no OTP is required, and let the runner replay it:
+
+```bash
+npm run session
+```
+
+That writes `session.json` (gitignored) and `session.b64`, whose contents go in
+the `NAUKRI_SESSION_B64` secret. With that set, the runner never touches the
+login form and never triggers an OTP.
+
+The short-lived `nauk_at` access token in the session expires about an hour
+after capture, but the `nauk_rt` refresh token is good for a year and Naukri
+renews the access token on page load. If the refresh ever stops being honoured,
+the run fails with *"The saved session is no longer valid"* — rerun
+`npm run session` and update the secret.
+
+### 2. Add the secrets
 
 Repo → **Settings → Secrets and variables → Actions → New repository secret**:
 
 | Secret | Value |
 | --- | --- |
-| `NAUKRI_EMAIL` | Naukri login email |
-| `NAUKRI_PASSWORD` | Naukri password |
+| `NAUKRI_SESSION_B64` | Contents of `session.b64` — **this is what makes cloud runs work** |
 | `RESUME_BASE64` | Base64 of your resume PDF (see below) |
+| `NAUKRI_EMAIL` | Naukri login email (only used if no session is set) |
+| `NAUKRI_PASSWORD` | Naukri password (only used if no session is set) |
 
 Secrets are not readable by forks and are not exposed in logs, so they are safe
 on a public repo. To regenerate the resume value at any time:
@@ -47,7 +72,7 @@ base64 -i resume/base.pdf | tr -d '
 Then paste into `RESUME_BASE64`. The workflow decodes it back to
 `resume/base.pdf` at the start of every run and verifies it is really a PDF.
 
-### 2. Enable the schedule
+### 3. Enable the schedule
 
 Scheduled workflows only run once the workflow file is on the repo's **default
 branch**. Then trigger a manual test:
@@ -86,12 +111,12 @@ DOM from the moment it gave up. Locally the same files land in `artifacts/`.
 
 Known failure modes, most likely first:
 
-- **Captcha / OTP / "unusual activity" wall.** GitHub's runners use datacenter
-  IPs, and Naukri flags them far more readily than a home connection. The
-  script detects these and names them in the error. There is no way around it
-  from a cloud runner — if it becomes persistent, the job has to move to a
-  machine on a residential IP (a home Mac via `launchd`, or a small VPS whose
-  IP Naukri has not flagged).
+- **"The saved session is no longer valid".** The session secret has gone
+  stale. Rerun `npm run session` on this Mac and update `NAUKRI_SESSION_B64`.
+  This is the expected maintenance task, not a bug.
+- **An OTP prompt.** Means the run fell back to password login because no
+  session secret was set. Set `NAUKRI_SESSION_B64`. Note the job deliberately
+  does **not** retry an OTP failure — each attempt sends another email.
 - **Changed selectors.** Naukri A/B-tests its markup. Every element is looked
   up through an ordered candidate list in `src/naukri.js` (`SELECTORS`); add
   the new selector to the front of the relevant list.
