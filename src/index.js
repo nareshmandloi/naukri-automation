@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { buildUniqueResume } from './pdf.js';
 import { refreshResume } from './naukri.js';
 import { loadEnvFile } from './env.js';
+import { readSession } from './session.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -31,28 +32,6 @@ function requireEnv(name) {
   return value;
 }
 
-/**
- * Loads a saved login session, from the NAUKRI_SESSION_B64 secret in CI or
- * session.json locally. Returns null when neither exists, in which case the
- * run falls back to logging in with the password.
- */
-async function readSession() {
-  const encoded = process.env.NAUKRI_SESSION_B64;
-  if (encoded) {
-    try {
-      return JSON.parse(Buffer.from(encoded.trim(), 'base64').toString('utf8'));
-    } catch (err) {
-      throw new Error(`NAUKRI_SESSION_B64 is not valid base64 JSON: ${err.message}`);
-    }
-  }
-  try {
-    return JSON.parse(await readFile(SESSION_FILE, 'utf8'));
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-    return null;
-  }
-}
-
 async function readState() {
   try {
     return JSON.parse(await readFile(STATE_FILE, 'utf8'));
@@ -68,7 +47,7 @@ async function main() {
   const dryRun = bool(process.env.DRY_RUN);
   const headless = bool(process.env.HEADLESS, true);
 
-  const sessionState = await readSession();
+  const sessionState = await readSession(SESSION_FILE);
 
   // Credentials are only needed for the password-login path; with a saved
   // session they are not required at all.

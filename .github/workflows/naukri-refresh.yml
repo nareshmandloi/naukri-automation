@@ -2,10 +2,9 @@ name: Naukri Resume Refresh
 
 on:
   schedule:
-    # Every 6 hours, on the hour (UTC). GitHub's shared runners frequently
+    # Once a day at 03:30 UTC == 09:00 IST. GitHub's shared runners frequently
     # delay scheduled jobs by 10-60 minutes; this is expected, not a fault.
-    # 00:00/06:00/12:00/18:00 UTC == 05:30/11:30/17:30/23:30 IST.
-    - cron: '0 */6 * * *'
+    - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       dry_run:

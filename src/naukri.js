@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const LOGIN_URL = 'https://www.naukri.com/nlogin/login';
-const PROFILE_URL = 'https://www.naukri.com/mnjuser/profile';
+export const PROFILE_URL = 'https://www.naukri.com/mnjuser/profile';
 
 // Naukri's markup shifts between A/B buckets, so every interactive element is
 // looked up through an ordered candidate list and the first hit wins.
@@ -35,7 +35,7 @@ export class PermanentFailure extends Error {
 }
 
 /** Returns the first selector in `candidates` that is attached to the page. */
-async function firstMatch(page, candidates, { timeout = 20000 } = {}) {
+export async function firstMatch(page, candidates, { timeout = 20000 } = {}) {
   const deadline = Date.now() + timeout;
   do {
     for (const selector of candidates) {
@@ -52,7 +52,7 @@ async function firstMatch(page, candidates, { timeout = 20000 } = {}) {
  * fact — the usual causes are a captcha or OTP wall, which are invisible in
  * logs but obvious in the screenshot.
  */
-async function capture(page, label, artifactDir) {
+export async function capture(page, label, artifactDir) {
   try {
     await mkdir(artifactDir, { recursive: true });
     const stem = path.join(artifactDir, label);
@@ -70,7 +70,7 @@ async function capture(page, label, artifactDir) {
  * legitimate page copy — note that a bare "otp" would match the login form's
  * own "Use OTP to Login" button, hence the longer phrases.
  */
-async function diagnoseBlock(page, status) {
+export async function diagnoseBlock(page, status) {
   if (status && status >= 400) return `HTTP ${status} from Naukri's edge (bot protection)`;
 
   const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
@@ -131,13 +131,8 @@ async function login(page, { email, password, artifactDir }) {
   console.log('✓ logged in');
 }
 
-async function uploadResume(page, { filePath, fileName, artifactDir, dryRun }) {
-  console.log('→ opening profile page');
-  const response = await page.goto(PROFILE_URL, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-
+/** Fails permanently if Naukri bounced the current page to its login form. */
+export async function assertSignedIn(page, artifactDir) {
   if (page.url().includes('/nlogin/') || page.url().includes('login')) {
     await capture(page, 'session-expired', artifactDir);
     throw new PermanentFailure(
@@ -145,6 +140,16 @@ async function uploadResume(page, { filePath, fileName, artifactDir, dryRun }) {
         'Re-capture it with `npm run session` and update the NAUKRI_SESSION_B64 secret.',
     );
   }
+}
+
+async function uploadResume(page, { filePath, fileName, artifactDir, dryRun }) {
+  console.log('→ opening profile page');
+  const response = await page.goto(PROFILE_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+
+  await assertSignedIn(page, artifactDir);
 
   const input = await firstMatch(page, SELECTORS.fileInput, { timeout: 30000 });
   if (!input) {
@@ -213,17 +218,11 @@ async function realisticUserAgent(browser) {
   }
 }
 
-/** Logs in and replaces the profile resume. Throws on any unverified outcome. */
-export async function refreshResume({
-  email,
-  password,
-  sessionState,
-  filePath,
-  fileName,
-  artifactDir,
-  headless = true,
-  dryRun = false,
-}) {
+/**
+ * Launches Chromium configured to get past Naukri's bot protection, optionally
+ * preloaded with a saved session. Callers own closing `context` and `browser`.
+ */
+export async function openBrowser({ headless = true, sessionState } = {}) {
   const browser = await chromium.launch({
     headless,
     // Must be the full Chromium build, NOT Playwright's default
@@ -248,6 +247,21 @@ export async function refreshResume({
 
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
+  return { browser, context, page };
+}
+
+/** Logs in and replaces the profile resume. Throws on any unverified outcome. */
+export async function refreshResume({
+  email,
+  password,
+  sessionState,
+  filePath,
+  fileName,
+  artifactDir,
+  headless = true,
+  dryRun = false,
+}) {
+  const { browser, context, page } = await openBrowser({ headless, sessionState });
 
   try {
     if (sessionState) {
@@ -269,22 +283,7 @@ export async function refreshResume({
  * the login form altogether.
  */
 export async function captureSession({ email, password, artifactDir, headless = true }) {
-  const browser = await chromium.launch({
-    headless,
-    channel: 'chromium',
-    args: ['--disable-blink-features=AutomationControlled'],
-  });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    locale: 'en-IN',
-    timezoneId: 'Asia/Kolkata',
-    userAgent: await realisticUserAgent(browser),
-  });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  });
-  const page = await context.newPage();
-  page.setDefaultTimeout(30000);
+  const { browser, context, page } = await openBrowser({ headless });
 
   try {
     await login(page, { email, password, artifactDir });

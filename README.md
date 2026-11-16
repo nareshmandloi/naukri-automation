@@ -1,8 +1,13 @@
-# Naukri Resume Auto-Refresh
+# Naukri Resume Auto-Refresh & Auto-Apply
 
-Re-uploads my Naukri resume every 6 hours under an incrementing version name
-(`...-V6.pdf`, `...-V7.pdf`, …) so the profile keeps showing as recently
-updated.
+Two scheduled jobs on Naukri:
+
+- **Resume refresh** re-uploads my resume once a day at 09:00 IST under an
+  incrementing version name (`...-V6.pdf`, `...-V7.pdf`, …) so the profile keeps showing as
+  recently updated.
+- **Auto-apply** checks for jobs posted in the last day every 2 hours and
+  applies to the ones whose skills match the resume. See
+  [Auto-apply](#auto-apply).
 
 ## How it works
 
@@ -57,6 +62,7 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 | Secret | Value |
 | --- | --- |
 | `NAUKRI_SESSION_B64` | Contents of `session.b64` — **this is what makes cloud runs work** |
+| `CANDIDATE_PROFILE` | Base64 of `candidate.json`, for auto-apply's screening questions (see [Screening questions](#screening-questions)) |
 | `RESUME_BASE64` | Base64 of your resume PDF (see below) |
 | `NAUKRI_EMAIL` | Naukri login email (only used if no session is set) |
 | `NAUKRI_PASSWORD` | Naukri password (only used if no session is set) |
@@ -121,12 +127,132 @@ Known failure modes, most likely first:
   up through an ordered candidate list in `src/naukri.js` (`SELECTORS`); add
   the new selector to the front of the relevant list.
 - **Schedule drift.** GitHub delays scheduled jobs on shared runners by
-  10–60 minutes, and drops them entirely under heavy load. Treat "every 6
-  hours" as approximate.
+  10–60 minutes, and drops them entirely under heavy load. Treat "09:00 IST"
+  and "every 2 hours" as approximate.
 - **Schedule silently disabled.** GitHub disables cron on repos with 60 days
-  of no activity. The version-bump commit on each successful run counts as
-  activity, so this self-heals while runs are succeeding — but a long failing
+  of no activity. The daily version-bump commit from the refresh job counts
+  as activity, so this self-heals while runs are succeeding — but a long failing
   streak can let it lapse.
+
+## Auto-apply
+
+`src/apply.js`, run by `.github/workflows/naukri-apply.yml` every 2 hours on
+the hour (UTC). The refresh job runs at 03:30 UTC, between two apply runs, so
+the two never use the session at the same time.
+
+1. **Skills come from the resume itself.** `resume/base.pdf` is parsed, and
+   every item in its *Technical Skills* section becomes a skill. Years of
+   experience are read from the summary ("6+ years of experience"). Change the
+   resume and the matching follows; there is no separate list to maintain.
+2. **Search.** Each keyword in `SEARCH_KEYWORDS` is searched with
+   `jobAge=1` (posted in the last day) and your experience. Results are read
+   from the JSON the results page fetches, with card scraping as a fallback.
+3. **Match.** Each job's skill tags are normalized (`React.js` = `ReactJS` =
+   `React`, `Generative AI` = `GenAI`, …) and compared with the resume. Generic
+   tags such as "IT Skills" or "Senior" are ignored. A job qualifies when at
+   least `MIN_MATCHED_SKILLS` tags match **and** at least `MIN_MATCH_RATIO` of
+   its tags match, and the posted experience range fits within a year either
+   way. The best matches are applied to first.
+4. **Apply.** Opens the job and clicks Apply only for Naukri's one-click
+   apply. These are skipped:
+   - **Already applied.** Naukri remembers this, so no state is kept in the
+     repo.
+   - **"Apply on company site".** External forms can't be filled reliably.
+   - **Screening questions it can't answer truthfully.** See below.
+
+   The run stops at `MAX_APPLICATIONS` or when Naukri reports its daily quota.
+
+### Screening questions
+
+Many jobs open a chat drawer with questions before applying. The tool answers
+them from two sources and never makes up an answer:
+
+- **`candidate.json`**: facts only you know. It is gitignored. In CI the same
+  JSON goes in the `CANDIDATE_PROFILE` secret.
+
+  ```json
+  {
+    "currentCtcLpa": 35,
+    "expectedCtcLpa": 45,
+    "noticePeriodDays": 30,
+    "currentCity": "Pune",
+    "willingToRelocate": true,
+    "relocationPreference": "Anywhere in India",
+    "workModes": ["remote", "hybrid", "onsite"],
+    "highestQualification": "B.E. Computer Science",
+    "skillYears": {},
+    "skillYearsRange": [4, 6]
+  }
+  ```
+
+  `skillYearsRange` keeps every skill answer within that range: lower figures
+  are raised, higher ones capped, and a skill the resume lists but no role
+  mentions gets the minimum. `skillYears` sets an exact figure per skill,
+  which is still clamped to the range. Remove the range to answer strictly
+  from the resume.
+
+- **The resume**: total years from the summary. Per-skill years come from
+  the date ranges of the roles that mention each skill, so a 2½-year LangGraph
+  role never turns into "6 years of LangGraph". A skill listed under Technical
+  Skills but in no role (Docker, AWS, …) has no figure. Add one to
+  `skillYears` to answer questions about it.
+
+| Question | Answer |
+| --- | --- |
+| Current / expected CTC | From the profile, in the unit asked for: LPA by default, rupees if it says INR, monthly if it says per month |
+| Notice period, "immediate joiner?" | `noticePeriodDays`. For a dropdown it picks the matching option ("1 Month", "16–30 days") |
+| Current location | `currentCity` |
+| Relocate / work from city X / remote / hybrid / on-site | Yes, per `willingToRelocate` and `workModes` |
+| Total / relevant years | Resume summary |
+| Years in skill X, "experience with X?" | Per-skill years, kept within `skillYearsRange`. A skill not on the resume is **not** answered |
+| Qualification / bachelor's degree | `highestQualification` |
+
+Anything else, such as notice-period buyout or negotiability, "why do you
+want to join us", or a skill you don't have, is **left unanswered and the job
+is not submitted**. The log lists those questions at the end of each run, so
+you can add a rule or a `skillYears` entry. Naukri only submits once the last
+question is answered, so stopping partway sends nothing.
+
+To set the secret:
+
+```bash
+base64 -i candidate.json | tr -d '\n' | pbcopy   # paste into CANDIDATE_PROFILE
+```
+
+In CI the log shows which rule answered each question (`current-ctc`,
+`years:react`, …) but never the answer itself.
+
+### Try it first
+
+```bash
+npm run apply:dry      # find and score jobs, open each one, never click Apply
+npm run apply:headed   # same, with a visible browser
+npm run apply          # apply for real
+```
+
+In Actions, a **manual** run of *Naukri Auto-Apply* defaults to `dry_run`.
+**Scheduled** runs apply for real.
+
+### Tuning
+
+Set these under **Settings → Secrets and variables → Actions → Variables**
+(or in `.env` locally). All are optional:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEARCH_KEYWORDS` | `Full Stack Developer, GenAI Engineer, Node.js Developer, React Developer` | Comma-separated searches |
+| `JOB_LOCATIONS` | anywhere | e.g. `pune,bangalore` |
+| `MAX_APPLICATIONS` | `4` | Per run. 12 runs/day × 4 = 48 stays under Naukri's ~50/day cap |
+| `MIN_MATCHED_SKILLS` | `3` | Job tags that must appear in the resume |
+| `MIN_MATCH_RATIO` | `0.4` | Share of a job's tags found in the resume |
+| `YEARS_EXPERIENCE` | from resume | Overrides the parsed value |
+
+### Privacy in logs
+
+Actions logs on a public repo are public. In CI the job therefore logs each
+job by index, match score and outcome, **not** by title or company. Set the
+variable `LOG_JOB_DETAILS=true` to log details anyway. Local runs always show
+them. Your full history is under *Naukri → Applies*.
 
 ## Updating the resume
 

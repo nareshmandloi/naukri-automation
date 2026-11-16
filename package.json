@@ -3,17 +3,21 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Re-uploads my Naukri resume every 6 hours under an incrementing version name to keep the profile fresh.",
+  "description": "Re-uploads my Naukri resume daily at 9 AM IST and auto-applies every 2 hours to fresh jobs that match the skills in it.",
   "scripts": {
     "refresh": "node src/index.js",
     "refresh:headed": "HEADLESS=false node src/index.js",
     "session": "node src/capture-session.js",
-    "session:headed": "HEADLESS=false node src/capture-session.js"
+    "session:headed": "HEADLESS=false node src/capture-session.js",
+    "apply": "node src/apply.js",
+    "apply:dry": "DRY_RUN=true node src/apply.js",
+    "apply:headed": "HEADLESS=false DRY_RUN=true node src/apply.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "pdfjs-dist": "6.4.299",
     "playwright": "1.64.0"
   }
 }

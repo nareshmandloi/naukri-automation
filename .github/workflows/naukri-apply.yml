@@ -1,0 +1,91 @@
+name: Naukri Auto-Apply
+
+on:
+  schedule:
+    # Every 2 hours on the hour (UTC) == every 2 hours at :30 IST. The resume
+    # refresh runs at 03:30 UTC, between two of these, so the two jobs never
+    # drive the same session at once.
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Find and score matching jobs, but do not apply'
+        type: boolean
+        default: true
+      max_applications:
+        description: 'Maximum applications this run'
+        type: string
+        default: '4'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: naukri-auto-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore resume from secret
+        env:
+          RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESUME_BASE64:-}" ]; then
+            echo "::error::RESUME_BASE64 secret is not set. See README > Setup."
+            exit 1
+          fi
+          mkdir -p resume
+          printf '%s' "$RESUME_BASE64" | tr -d '[:space:]' | base64 -d > resume/base.pdf
+          if [ "$(head -c 5 resume/base.pdf)" != "%PDF-" ]; then
+            echo "::error::RESUME_BASE64 did not decode to a PDF. Re-copy the secret."
+            exit 1
+          fi
+
+      - name: Apply to matching jobs
+        env:
+          NAUKRI_SESSION_B64: ${{ secrets.NAUKRI_SESSION_B64 }}
+          # Screening-question answers (CTC, notice period, location). Without
+          # it, jobs that ask questions are skipped rather than answered.
+          CANDIDATE_PROFILE: ${{ secrets.CANDIDATE_PROFILE }}
+          # Scheduled runs have no inputs, so they apply for real; a manual
+          # run defaults to a dry run.
+          DRY_RUN: ${{ inputs.dry_run }}
+          MAX_APPLICATIONS: ${{ inputs.max_applications || vars.MAX_APPLICATIONS }}
+          # Optional tuning via Settings → Secrets and variables → Variables.
+          SEARCH_KEYWORDS: ${{ vars.SEARCH_KEYWORDS }}
+          JOB_LOCATIONS: ${{ vars.JOB_LOCATIONS }}
+          MIN_MATCHED_SKILLS: ${{ vars.MIN_MATCHED_SKILLS }}
+          MIN_MATCH_RATIO: ${{ vars.MIN_MATCH_RATIO }}
+          YEARS_EXPERIENCE: ${{ vars.YEARS_EXPERIENCE }}
+        run: npm run apply
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apply-diagnostics-${{ github.run_number }}
+          path: |
+            artifacts/*.png
+            artifacts/*.html
+          retention-days: 7
+          if-no-files-found: ignore

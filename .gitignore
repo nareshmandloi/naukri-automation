@@ -14,3 +14,7 @@ artifacts/
 resume/
 session.json
 session.b64
+
+# Screening-question answers (CTC, notice period, location). Lives only here
+# and in the CANDIDATE_PROFILE Actions secret.
+candidate.json
