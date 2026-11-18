@@ -2,9 +2,14 @@ name: Naukri Resume Refresh
 
 on:
   schedule:
-    # Once a day at 03:30 UTC == 09:00 IST. GitHub's shared runners frequently
-    # delay scheduled jobs by 10-60 minutes; this is expected, not a fault.
-    - cron: '30 3 * * *'
+    # Daily around 09:00 IST. GitHub drops or delays scheduled runs under load
+    # (worst on the hour), so there are four off-peak attempts; the first that
+    # runs uploads and the others exit (ONCE_PER_DAY below).
+    # 03:33 / 04:03 / 04:33 / 05:03 UTC == 09:03 / 09:33 / 10:03 / 10:33 IST.
+    - cron: '33 3 * * *'
+    - cron: '3 4 * * *'
+    - cron: '33 4 * * *'
+    - cron: '3 5 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -30,6 +35,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The branch tip, not the commit the schedule fired on, so a backup
+          # run sees the version bump an earlier run pushed today.
+          ref: ${{ github.ref_name }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -70,6 +79,7 @@ jobs:
           NAUKRI_EMAIL: ${{ secrets.NAUKRI_EMAIL }}
           NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
           DRY_RUN: ${{ inputs.dry_run }}
+          ONCE_PER_DAY: ${{ github.event_name == 'schedule' }}
         run: npm run refresh
 
       - name: Upload failure diagnostics

@@ -2,11 +2,11 @@
 
 Two scheduled jobs on Naukri:
 
-- **Resume refresh** re-uploads my resume once a day at 09:00 IST under an
-  incrementing version name (`...-V6.pdf`, `...-V7.pdf`, …) so the profile keeps showing as
+- **Resume refresh** re-uploads my resume once a day around 09:00 IST under
+  an incrementing version name (`...-V6.pdf`, `...-V7.pdf`, …) so the profile keeps showing as
   recently updated.
-- **Auto-apply** checks for jobs posted in the last day every 2 hours and
-  applies to the ones whose skills match the resume. See
+- **Auto-apply** checks hourly for jobs posted in the last day and applies,
+  up to 50 a day, to the ones whose skills match the resume. See
   [Auto-apply](#auto-apply).
 
 ## How it works
@@ -62,6 +62,7 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 | Secret | Value |
 | --- | --- |
 | `NAUKRI_SESSION_B64` | Contents of `session.b64` — **this is what makes cloud runs work** |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Optional, for the run report (see [Telegram report](#telegram-report-after-every-run-that-applies)) |
 | `CANDIDATE_PROFILE` | Base64 of `candidate.json`, for auto-apply's screening questions (see [Screening questions](#screening-questions)) |
 | `RESUME_BASE64` | Base64 of your resume PDF (see below) |
 | `NAUKRI_EMAIL` | Naukri login email (only used if no session is set) |
@@ -126,19 +127,24 @@ Known failure modes, most likely first:
 - **Changed selectors.** Naukri A/B-tests its markup. Every element is looked
   up through an ordered candidate list in `src/naukri.js` (`SELECTORS`); add
   the new selector to the front of the relevant list.
-- **Schedule drift.** GitHub delays scheduled jobs on shared runners by
-  10–60 minutes, and drops them entirely under heavy load. Treat "09:00 IST"
-  and "every 2 hours" as approximate.
+- **Schedule drift.** GitHub delays scheduled jobs on shared runners, by
+  hours at busy times, and drops some entirely. That is why the refresh has
+  four backup times (09:03–10:33 IST, first one wins) and auto-apply runs
+  hourly against a daily cap instead of relying on a fixed number of runs.
 - **Schedule silently disabled.** GitHub disables cron on repos with 60 days
-  of no activity. The daily version-bump commit from the refresh job counts
-  as activity, so this self-heals while runs are succeeding — but a long failing
+  of no activity. The daily version-bump and counter commits count as
+  activity, so this self-heals while runs are succeeding — but a long failing
   streak can let it lapse.
 
 ## Auto-apply
 
-`src/apply.js`, run by `.github/workflows/naukri-apply.yml` every 2 hours on
-the hour (UTC). The refresh job runs at 03:30 UTC, between two apply runs, so
-the two never use the session at the same time.
+`src/apply.js`, run by `.github/workflows/naukri-apply.yml` hourly at :17
+(UTC). GitHub drops a share of scheduled runs, so the **daily cap**
+(`DAILY_LIMIT`, 50 per IST day), not the number of runs, is what limits
+applications. Each run applies to at most `MAX_APPLICATIONS` (10), and a
+dropped run costs nothing. The count lives in `state/applies.json` (numbers
+only, no job details, since the repo is public) and is committed after each
+run that applied.
 
 1. **Skills come from the resume itself.** `resume/base.pdf` is parsed, and
    every item in its *Technical Skills* section becomes a skill. Years of
@@ -160,7 +166,9 @@ the two never use the session at the same time.
    - **"Apply on company site".** External forms can't be filled reliably.
    - **Screening questions it can't answer truthfully.** See below.
 
-   The run stops at `MAX_APPLICATIONS` or when Naukri reports its daily quota.
+   The run stops at `MAX_APPLICATIONS`, at the daily cap, or when Naukri
+   reports its own daily quota. In that last case the rest of the day's runs
+   are skipped too.
 
 ### Screening questions
 
@@ -242,10 +250,35 @@ Set these under **Settings → Secrets and variables → Actions → Variables**
 | --- | --- | --- |
 | `SEARCH_KEYWORDS` | `Full Stack Developer, GenAI Engineer, Node.js Developer, React Developer` | Comma-separated searches |
 | `JOB_LOCATIONS` | anywhere | e.g. `pune,bangalore` |
-| `MAX_APPLICATIONS` | `4` | Per run. 12 runs/day × 4 = 48 stays under Naukri's ~50/day cap |
+| `DAILY_LIMIT` | `50` | Applications per IST day, across all runs |
+| `MAX_APPLICATIONS` | `10` | Per run |
 | `MIN_MATCHED_SKILLS` | `3` | Job tags that must appear in the resume |
 | `MIN_MATCH_RATIO` | `0.4` | Share of a job's tags found in the resume |
 | `YEARS_EXPERIENCE` | from resume | Overrides the parsed value |
+
+### Telegram report after every run that applies
+
+Each run that applies to at least one job sends one Telegram message listing:
+
+- every job applied to, with a link and match %
+- jobs left for a manual apply, with the question that stopped the bot
+- the running totals: **today / 50**, the **bot's total** since the counter
+  started (18 Nov 2026), and **Naukri's own "Total applies"**, which also
+  includes applications made by hand and before the counter existed.
+
+One-time setup, about 2 minutes:
+
+1. In Telegram, message **@BotFather** → `/newbot` → pick a name. It replies
+   with a **token**.
+2. Open your new bot and press **Start**, or send it "hi".
+3. Put `TELEGRAM_BOT_TOKEN=<token>` in `.env` and run `npm run telegram:setup`.
+   It prints your `TELEGRAM_CHAT_ID` and sends a test message.
+4. Add both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` as repository secrets.
+
+A **manual dry run** sends the same message marked `[DRY RUN]`, the easiest
+way to confirm the secrets. Without them, runs still work and just skip the
+report. Only you see the messages: a bot can only message chats that started
+it.
 
 ### Privacy in logs
 

@@ -60,6 +60,18 @@ async function main() {
   await mkdir(ARTIFACT_DIR, { recursive: true });
 
   const state = await readState();
+
+  // The workflow is scheduled at several backup times because GitHub drops
+  // or delays scheduled runs. The first one that runs uploads; the rest see
+  // today's upload (in IST) and stop. Manual and local runs always upload.
+  if (bool(process.env.ONCE_PER_DAY) && state.lastUploadedAt) {
+    const ist = (d) => new Date(new Date(d).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    if (ist(state.lastUploadedAt) === ist(Date.now())) {
+      console.log(`Already uploaded today (${state.lastUploadedName} at ${state.lastUploadedAt}) — skipping.`);
+      return;
+    }
+  }
+
   const nextVersion = Number(state.version) + 1;
   const fileName = `${NAME_PREFIX}${nextVersion}.pdf`;
   const filePath = path.join(ARTIFACT_DIR, fileName);

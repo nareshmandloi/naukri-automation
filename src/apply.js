@@ -1,4 +1,4 @@
-import { access, mkdir, rm } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from './env.js';
@@ -7,6 +7,7 @@ import { openBrowser, assertSignedIn, PROFILE_URL } from './naukri.js';
 import { loadResumeProfile, scoreJob, parseExperience } from './skills.js';
 import { searchJobs, applyToJob } from './jobs.js';
 import { readCandidate, answerQuestionnaire } from './questions.js';
+import { sendRunReport } from './notify.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 loadEnvFile(path.join(ROOT, '.env'));
@@ -15,6 +16,8 @@ const BASE_RESUME = path.join(ROOT, 'resume', 'base.pdf');
 const SESSION_FILE = path.join(ROOT, 'session.json');
 const CANDIDATE_FILE = path.join(ROOT, 'candidate.json');
 const ARTIFACT_DIR = path.join(ROOT, 'artifacts');
+const COUNTS_FILE = path.join(ROOT, 'state', 'applies.json');
+const HISTORY_URL = 'https://www.naukri.com/myapply/historypage';
 
 const DEFAULT_KEYWORDS = 'Full Stack Developer, GenAI Engineer, Node.js Developer, React Developer';
 
@@ -22,10 +25,51 @@ const bool = (v, d = false) => (v === undefined || v === '' ? d : /^(1|true|yes)
 const num = (v, d) => (v === undefined || v === '' || Number.isNaN(Number(v)) ? d : Number(v));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Today's date in India, since Naukri's daily limit follows IST days. */
+const istDay = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+
+/**
+ * Application counters, committed to the repo so they survive between runs.
+ * Counts only — never which jobs — because the repo is public.
+ */
+async function readCounts() {
+  let c;
+  try {
+    c = JSON.parse(await readFile(COUNTS_FILE, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    c = { total: 0, since: istDay(), day: istDay(), today: 0 };
+  }
+  if (c.day !== istDay()) Object.assign(c, { day: istDay(), today: 0 });
+  return c;
+}
+
+async function writeCounts(c) {
+  await writeFile(COUNTS_FILE, `${JSON.stringify(c, null, 2)}\n`, 'utf8');
+}
+
+/** Best effort: Naukri's own "Total applies" figure from the history page. */
+async function readNaukriTotal(page) {
+  try {
+    await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const text = await page.locator('body').innerText().catch(() => '');
+      const m = text.match(/(\d[\d,]*)\s*Total\s*applies/i);
+      if (m) return Number(m[1].replace(/,/g, ''));
+      await page.waitForTimeout(1000);
+    }
+  } catch {
+    // Only used for the report; never fail a run over it.
+  }
+  return null;
+}
+
 async function main() {
   const dryRun = bool(process.env.DRY_RUN);
   const headless = bool(process.env.HEADLESS, true);
-  const maxApplications = num(process.env.MAX_APPLICATIONS, 4);
+  const maxApplications = num(process.env.MAX_APPLICATIONS, 10);
+  const dailyLimit = num(process.env.DAILY_LIMIT, 50);
   const minMatched = num(process.env.MIN_MATCHED_SKILLS, 3);
   const minRatio = num(process.env.MIN_MATCH_RATIO, 0.4);
   const locations = process.env.JOB_LOCATIONS || undefined;
@@ -66,16 +110,29 @@ async function main() {
 
   const candidate = await readCandidate(CANDIDATE_FILE);
 
+  const counts = await readCounts();
+  const remainingToday = Math.max(0, dailyLimit - counts.today);
+  const runCap = dryRun ? maxApplications : Math.min(maxApplications, remainingToday);
+
   console.log(`Naukri auto-apply — ${new Date().toISOString()}`);
   console.log(`  resume skills    : ${profile.skills.size}`);
   console.log(`  experience       : ${years ?? 'unknown'} years`);
   console.log(`  keywords         : ${keywords.length}`);
   console.log(`  match threshold  : ≥${minMatched} skills and ≥${Math.round(minRatio * 100)}%`);
-  console.log(`  max applications : ${maxApplications}`);
+  console.log(`  applied today    : ${counts.today} / ${dailyLimit} (IST day ${counts.day})`);
+  console.log(`  this run's cap   : ${runCap}`);
+  console.log(`  bot total        : ${counts.total} since ${counts.since}`);
   console.log(`  screening Qs     : ${candidate ? 'answered from candidate profile' : 'skipped (no CANDIDATE_PROFILE)'}`);
   if (dryRun) console.log('  mode             : DRY_RUN (no applications sent)');
 
+  if (runCap === 0) {
+    console.log(`\nDaily limit of ${dailyLimit} already reached — nothing to do until tomorrow (IST).`);
+    return;
+  }
+
   const { browser, context, page } = await openBrowser({ headless, sessionState });
+  const appliedJobs = [];
+  const manualJobs = [];
   const tally = {};
   const unanswered = [];
   let errors = 0;
@@ -120,13 +177,14 @@ async function main() {
 
     let applied = 0;
     for (const [i, { job, score }] of candidates.entries()) {
-      if (applied >= maxApplications) break;
+      if (applied >= runCap) break;
 
       const label = String(i + 1);
       const name = showDetails ? `${job.title} @ ${job.company}` : `job ${label}`;
       const pct = Math.round(score.ratio * 100);
 
       let outcome = 'unknown';
+      let lastUnanswered = null;
       // One retry covers a transient network or navigation error. It is safe:
       // if the first attempt did submit, the retry sees "Applied" and stops.
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -136,7 +194,10 @@ async function main() {
             artifactDir: ARTIFACT_DIR,
             label,
             answerQuestions,
-            onUnanswered: (question, status) => unanswered.push(`${status}: ${question}`),
+            onUnanswered: (question, status) => {
+              unanswered.push(`${status}: ${question}`);
+              lastUnanswered = question;
+            },
           });
           break;
         } catch (err) {
@@ -149,7 +210,21 @@ async function main() {
       const skills = showDetails ? ` [${score.matched.join(', ')}]` : '';
       console.log(`${outcome.padEnd(15)} ${pct}% ${score.matched.length}/${score.considered}  ${name}${skills}`);
 
-      if (outcome.startsWith('applied') || outcome === 'dry-run') applied += 1;
+      const record = { title: job.title, company: job.company, url: job.url, matchPct: pct };
+      if (outcome.startsWith('applied') || outcome === 'dry-run') {
+        applied += 1;
+        appliedJobs.push({
+          ...record,
+          note: outcome === 'applied+answers' ? 'Answered screening questions' : dryRun ? 'Dry run — not sent' : '',
+        });
+        if (!dryRun) {
+          // Saved after every application, so a crash mid-run keeps the count.
+          counts.today += 1;
+          counts.total += 1;
+          await writeCounts(counts);
+        }
+      }
+      if (outcome === 'needs-answers') manualJobs.push({ ...record, note: lastUnanswered ?? '' });
       if (outcome === 'unknown') errors += 1;
       // Debug aid: stop at the first questionnaire so its handling can be
       // inspected without spending more applications.
@@ -159,12 +234,37 @@ async function main() {
       }
       if (outcome === 'quota') {
         console.log('Naukri reports the daily application quota is used up — stopping.');
+        // Stop the remaining runs today from trying.
+        counts.today = Math.max(counts.today, dailyLimit);
+        await writeCounts(counts);
         break;
       }
       await sleep(4000 + Math.random() * 5000);
     }
 
     console.log(`\nSummary: ${JSON.stringify(tally)}`);
+    console.log(`Applied today: ${counts.today} / ${dailyLimit} · bot total: ${counts.total}`);
+
+    // One Telegram message per run that applied to something (or, on a
+    // manual dry run, would have — which doubles as a test of the setup).
+    if (appliedJobs.length) {
+      const naukriTotal = await readNaukriTotal(page);
+      const runUrl = process.env.GITHUB_RUN_ID
+        ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+        : null;
+      try {
+        await sendRunReport({
+          applied: appliedJobs,
+          manual: manualJobs,
+          counts: { ...counts, dailyLimit },
+          naukriTotal,
+          runUrl,
+          dryRun,
+        });
+      } catch (err) {
+        console.log(`::warning::Telegram report failed: ${err.message}`);
+      }
+    }
     if (tally['needs-answers']) {
       console.log(
         `${tally['needs-answers']} job(s) asked questions the tool cannot answer truthfully and ` +

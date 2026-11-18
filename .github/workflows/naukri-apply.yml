@@ -2,10 +2,12 @@ name: Naukri Auto-Apply
 
 on:
   schedule:
-    # Every 2 hours on the hour (UTC) == every 2 hours at :30 IST. The resume
-    # refresh runs at 03:30 UTC, between two of these, so the two jobs never
-    # drive the same session at once.
-    - cron: '0 */2 * * *'
+    # Hourly at :17 (UTC; :47 IST). Off the hour because GitHub drops on-the-
+    # hour schedules first, and hourly because it drops some anyway: the daily
+    # cap (DAILY_LIMIT, 50) rather than the run count is what bounds applies,
+    # so a dropped run costs nothing. Never collides with the resume refresh
+    # at :03/:33.
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -15,10 +17,11 @@ on:
       max_applications:
         description: 'Maximum applications this run'
         type: string
-        default: '4'
+        default: '10'
 
+# Needed to push the application counter (state/applies.json).
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: naukri-auto-apply
@@ -32,6 +35,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Branch tip, so the run starts from the latest counter.
+          ref: ${{ github.ref_name }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -71,6 +77,10 @@ jobs:
           # run defaults to a dry run.
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_APPLICATIONS: ${{ inputs.max_applications || vars.MAX_APPLICATIONS }}
+          DAILY_LIMIT: ${{ vars.DAILY_LIMIT }}
+          # Run report to your Telegram bot (see README > Telegram report).
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Optional tuning via Settings → Secrets and variables → Variables.
           SEARCH_KEYWORDS: ${{ vars.SEARCH_KEYWORDS }}
           JOB_LOCATIONS: ${{ vars.JOB_LOCATIONS }}
@@ -89,3 +99,25 @@ jobs:
             artifacts/*.html
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Commit application counter
+        # always(): a run that applied to some jobs and then failed must still
+        # record them, or the daily cap would undercount.
+        if: always()
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- state/applies.json; then
+            echo "Counter unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add state/applies.json
+          git commit -m "chore: $(node -p "const c=require('./state/applies.json'); c.today+' applied today, '+c.total+' total'")"
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "Push rejected (attempt $attempt) — rebasing on origin."
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          done
+          echo "::error::Could not push the counter after 3 attempts."
+          exit 1
