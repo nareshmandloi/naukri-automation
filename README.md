@@ -5,7 +5,8 @@ Two scheduled jobs on Naukri:
 - **Resume refresh** re-uploads my resume once a day around 09:00 IST under
   an incrementing version name (`...-V6.pdf`, `...-V7.pdf`, …) so the profile keeps showing as
   recently updated.
-- **Auto-apply** checks hourly for jobs posted in the last day and applies,
+- **Auto-apply** checks hourly from 9:35 AM to 11:35 PM IST for jobs posted
+  in the last day and applies,
   up to 50 a day, to the ones whose skills match the resume. See
   [Auto-apply](#auto-apply).
 
@@ -138,8 +139,8 @@ Known failure modes, most likely first:
 
 ## Auto-apply
 
-`src/apply.js`, run by `.github/workflows/naukri-apply.yml` hourly at :17
-(UTC). GitHub drops a share of scheduled runs, so the **daily cap**
+`src/apply.js`, run by `.github/workflows/naukri-apply.yml` hourly from
+9:35 AM to 11:35 PM IST (`5 4-18 * * *` UTC). GitHub drops a share of scheduled runs, so the **daily cap**
 (`DAILY_LIMIT`, 50 per IST day), not the number of runs, is what limits
 applications. Each run applies to at most `MAX_APPLICATIONS` (10), and a
 dropped run costs nothing. The count lives in `state/applies.json` (numbers
@@ -275,9 +276,17 @@ One-time setup, about 2 minutes:
    It prints your `TELEGRAM_CHAT_ID` and sends a test message.
 4. Add both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` as repository secrets.
 
+Besides the per-run report, Telegram also gets:
+
+- **A daily check-in** after the morning resume upload, with the new version
+  and the applications today and in total. If it stops arriving, something
+  needs attention.
+- **A ❌ alert** whenever either workflow fails, with a link to the log.
+
 A **manual dry run** sends the same message marked `[DRY RUN]`, the easiest
-way to confirm the secrets. Without them, runs still work and just skip the
-report. Only you see the messages: a bot can only message chats that started
+way to confirm the secrets. If the secrets are **missing**, auto-apply still
+applies but then **fails the run** with "Telegram reports are OFF". GitHub's
+failure email then tells you, instead of the reports silently never arriving. Only you see the messages: a bot can only message chats that started
 it.
 
 ### Privacy in logs

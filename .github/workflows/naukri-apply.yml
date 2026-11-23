@@ -2,12 +2,11 @@ name: Naukri Auto-Apply
 
 on:
   schedule:
-    # Hourly at :17 (UTC; :47 IST). Off the hour because GitHub drops on-the-
-    # hour schedules first, and hourly because it drops some anyway: the daily
-    # cap (DAILY_LIMIT, 50) rather than the run count is what bounds applies,
-    # so a dropped run costs nothing. Never collides with the resume refresh
-    # at :03/:33.
-    - cron: '17 * * * *'
+    # Hourly from 9:35 AM to 11:35 PM IST (15 runs), i.e. 04:05-18:05 UTC.
+    # A few minutes past the hour because GitHub drops on-the-hour schedules
+    # first. GitHub still drops some runs under load; the daily cap
+    # (DAILY_LIMIT, 50), not the run count, is what bounds applications.
+    - cron: '5 4-18 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -88,6 +87,22 @@ jobs:
           MIN_MATCH_RATIO: ${{ vars.MIN_MATCH_RATIO }}
           YEARS_EXPERIENCE: ${{ vars.YEARS_EXPERIENCE }}
         run: npm run apply
+
+      - name: Alert on Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "::error::Telegram secrets missing — no failure alert sent."
+            exit 0
+          fi
+          curl -sS --retry 2 -o /dev/null -w "Telegram alert: HTTP %{http_code}\n" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=❌ ${{ github.workflow }} failed. Log: ${RUN_URL}"
 
       - name: Upload failure diagnostics
         if: failure()

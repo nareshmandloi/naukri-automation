@@ -5,6 +5,7 @@ import { buildUniqueResume } from './pdf.js';
 import { refreshResume } from './naukri.js';
 import { loadEnvFile } from './env.js';
 import { readSession } from './session.js';
+import { sendTelegram, telegramConfigured } from './notify.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,6 +43,41 @@ async function readState() {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Daily check-in on Telegram after the resume upload: the new version plus
+ * the auto-apply counters. It arrives once a day, so its absence is itself
+ * the signal that something is wrong. Never fails the refresh.
+ */
+async function sendCheckIn(fileName, dryRun) {
+  if (!telegramConfigured()) {
+    if (process.env.GITHUB_ACTIONS) {
+      console.log('::warning::Telegram check-in not sent — TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets missing.');
+    }
+    return;
+  }
+  let counts = null;
+  try {
+    counts = JSON.parse(await readFile(path.join(ROOT, 'state', 'applies.json'), 'utf8'));
+  } catch {
+    // No counter yet — the check-in still reports the upload.
+  }
+  const istToday = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = counts && counts.day === istToday ? counts.today : 0;
+  const lines = [
+    dryRun ? '🧪 <b>[DRY RUN]</b> resume refresh check passed' : `📄 Resume refreshed: <b>${fileName}</b>`,
+    counts
+      ? `📊 Auto-apply: <b>${today}</b> today · <b>${counts.total}</b> total since ${counts.since}`
+      : '📊 Auto-apply: no applications recorded yet',
+    '<i>Daily check-in. If this stops arriving, the automation needs attention.</i>',
+  ];
+  try {
+    await sendTelegram(lines.join('\n'));
+    console.log('✓ Telegram check-in sent');
+  } catch (err) {
+    console.log(`::warning::Telegram check-in failed: ${err.message}`);
+  }
+}
 
 async function main() {
   const dryRun = bool(process.env.DRY_RUN);
@@ -113,6 +149,7 @@ async function main() {
 
       if (result.dryRun) {
         console.log('\nDRY_RUN complete — version not advanced.');
+        await sendCheckIn(fileName, true);
         return;
       }
 
@@ -133,6 +170,7 @@ async function main() {
       );
 
       console.log(`\n✓ Done. Profile resume is now ${fileName}; next run uses V${nextVersion + 1}.`);
+      await sendCheckIn(fileName, false);
       return;
     } catch (err) {
       lastError = err;

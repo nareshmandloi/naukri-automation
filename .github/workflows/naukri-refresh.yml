@@ -80,7 +80,26 @@ jobs:
           NAUKRI_PASSWORD: ${{ secrets.NAUKRI_PASSWORD }}
           DRY_RUN: ${{ inputs.dry_run }}
           ONCE_PER_DAY: ${{ github.event_name == 'schedule' }}
+          # Daily Telegram check-in after the upload.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: npm run refresh
+
+      - name: Alert on Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "::error::Telegram secrets missing — no failure alert sent."
+            exit 0
+          fi
+          curl -sS --retry 2 -o /dev/null -w "Telegram alert: HTTP %{http_code}\n" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=❌ ${{ github.workflow }} failed. Log: ${RUN_URL}"
 
       - name: Upload failure diagnostics
         if: failure()

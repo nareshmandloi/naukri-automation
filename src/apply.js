@@ -7,7 +7,7 @@ import { openBrowser, assertSignedIn, PROFILE_URL } from './naukri.js';
 import { loadResumeProfile, scoreJob, parseExperience } from './skills.js';
 import { searchJobs, applyToJob } from './jobs.js';
 import { readCandidate, answerQuestionnaire } from './questions.js';
-import { sendRunReport } from './notify.js';
+import { sendRunReport, telegramConfigured } from './notify.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 loadEnvFile(path.join(ROOT, '.env'));
@@ -286,7 +286,26 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`\nFATAL: ${err.message}`);
-  process.exitCode = 1;
-});
+/**
+ * In CI, a missing Telegram config fails the run (after applying and saving
+ * the counter), so GitHub's failure email says so — otherwise reports would
+ * silently never arrive.
+ */
+function assertTelegramInCi() {
+  if (process.env.GITHUB_ACTIONS && !telegramConfigured()) {
+    console.error(
+      '\n::error::Telegram reports are OFF: the TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID ' +
+        'repository secrets are missing. Add them under Settings → Secrets and variables → ' +
+        'Actions → Repository secrets. (Applications in this run still went through.)',
+    );
+    process.exitCode = 1;
+  }
+}
+
+main()
+  .then(assertTelegramInCi)
+  .catch((err) => {
+    console.error(`\nFATAL: ${err.message}`);
+    process.exitCode = 1;
+    assertTelegramInCi();
+  });
