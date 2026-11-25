@@ -17,6 +17,7 @@ const SESSION_FILE = path.join(ROOT, 'session.json');
 const CANDIDATE_FILE = path.join(ROOT, 'candidate.json');
 const ARTIFACT_DIR = path.join(ROOT, 'artifacts');
 const COUNTS_FILE = path.join(ROOT, 'state', 'applies.json');
+const UNANSWERED_FILE = path.join(ROOT, 'state', 'unanswered-questions.json');
 const HISTORY_URL = 'https://www.naukri.com/myapply/historypage';
 
 const DEFAULT_KEYWORDS = 'Full Stack Developer, GenAI Engineer, Node.js Developer, React Developer';
@@ -24,6 +25,30 @@ const DEFAULT_KEYWORDS = 'Full Stack Developer, GenAI Engineer, Node.js Develope
 const bool = (v, d = false) => (v === undefined || v === '' ? d : /^(1|true|yes)$/i.test(v));
 const num = (v, d) => (v === undefined || v === '' || Number.isNaN(Number(v)) ? d : Number(v));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Tallies screening questions the bot could not answer, so the most frequent
+ * ones can be added to the answer bank. Holds only employers' question text —
+ * nothing about the user — since the repo is public.
+ */
+async function recordUnanswered(questions) {
+  if (!questions.length) return;
+  let log = {};
+  try {
+    log = JSON.parse(await readFile(UNANSWERED_FILE, 'utf8'));
+  } catch {
+    // first run, or unreadable — start fresh
+  }
+  const day = istDay();
+  for (const raw of questions) {
+    const q = raw.replace(/^(unanswered|stuck):\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const entry = (log[q] ??= { count: 0, firstSeen: day });
+    entry.count += 1;
+    entry.lastSeen = day;
+  }
+  const sorted = Object.fromEntries(Object.entries(log).sort((a, b) => b[1].count - a[1].count));
+  await writeFile(UNANSWERED_FILE, `${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
+}
 
 /** Today's date in India, since Naukri's daily limit follows IST days. */
 const istDay = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
@@ -304,6 +329,7 @@ async function main() {
       // it is what tells you which rule or skillYears entry to add.
       for (const q of unanswered) console.log(`  - ${q}`);
     }
+    await recordUnanswered(unanswered);
 
     if (reportFailed) process.exitCode = 1;
 

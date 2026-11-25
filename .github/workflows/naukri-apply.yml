@@ -115,19 +115,22 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Commit application counter
+      - name: Commit application counter and question log
         # always(): a run that applied to some jobs and then failed must still
         # record them, or the daily cap would undercount.
         if: always()
         run: |
           set -euo pipefail
-          if git diff --quiet -- state/applies.json; then
-            echo "Counter unchanged — nothing to commit."
+          if git diff --quiet -- state/applies.json && \
+             { [ ! -f state/unanswered-questions.json ] || git diff --quiet -- state/unanswered-questions.json; } && \
+             [ -z "$(git ls-files --others --exclude-standard state/)" ]; then
+            echo "Counter and question log unchanged — nothing to commit."
             exit 0
           fi
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add state/applies.json
+          [ -f state/unanswered-questions.json ] && git add state/unanswered-questions.json
           git commit -m "chore: $(node -p "const c=require('./state/applies.json'); c.today+' applied today, '+c.total+' total'")"
           for attempt in 1 2 3; do
             if git push; then exit 0; fi

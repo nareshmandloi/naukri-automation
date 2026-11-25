@@ -106,6 +106,53 @@ const no = (rule) => ({ rule, bool: false, text: 'No' });
  * question is not one we can answer truthfully from candidate.json and the
  * resume. Order matters: exclusions are checked before the broad rules.
  */
+/**
+ * Looks the question up in candidate.json's `answerBank`: answers the user
+ * wrote or approved for questions the rules can't derive (reason for change,
+ * bond, shifts, APIs built, …). Each entry has regex `match` strings, the
+ * `answer` text, optional `options` keywords to pick in a multiple-choice
+ * question (in priority order), and an optional `number` for "how many".
+ */
+/**
+ * Expands {{date+N}} in an answer to the date N days from today (IST), e.g.
+ * "25 Dec 2026", so a last-working-day answer stays current every day.
+ */
+export function fillDates(text, now = new Date()) {
+  return String(text ?? '').replace(/\{\{date\+(\d+)\}\}/g, (_, n) => {
+    const ist = new Date(now.getTime() + 5.5 * 3600 * 1000 + Number(n) * 86400 * 1000);
+    return ist.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  });
+}
+
+export function decideFromBank(rawQuestion, candidate) {
+  const q = rawQuestion.toLowerCase().replace(/\s+/g, ' ').trim();
+  for (const entry of candidate.answerBank ?? []) {
+    const hit = (entry.match ?? []).some((pattern) => {
+      try {
+        return new RegExp(pattern, 'i').test(q);
+      } catch {
+        return false; // a malformed pattern in candidate.json must not crash a run
+      }
+    });
+    if (!hit) continue;
+    const wantsNumber = entry.number != null && /how many|number of|size|count/.test(q);
+    return {
+      rule: `bank:${entry.id ?? 'entry'}`,
+      text: wantsNumber ? String(entry.number) : fillDates(entry.answer),
+      ...(entry.number != null ? { number: entry.number } : {}),
+      prefer: entry.options ?? [],
+    };
+  }
+  return null;
+}
+
+function decideSingle(rawQuestion, context) {
+  // Rules first: they compute answers (years, CTC units, notice options).
+  // The bank covers what rules can't — including questions the rules
+  // deliberately refuse to guess (e.g. buyout), when the user answered them.
+  return decideByRules(rawQuestion, context) ?? decideFromBank(rawQuestion, context.candidate);
+}
+
 export function decideAnswer(rawQuestion, context) {
   // "How many years in React? Have you worked on X?" is two questions in one
   // message. Answering only the first would leave the second silently
@@ -119,13 +166,13 @@ export function decideAnswer(rawQuestion, context) {
     if (answers.some((a) => !a)) return null;
     return {
       rule: answers.map((a) => a.rule).join(' & '),
-      text: answers.map((a) => a.text).join('. '),
+      text: answers.map((a) => a.text.trim().replace(/[.。]+$/, '')).join('. ') + '.',
     };
   }
   return decideSingle(rawQuestion, context);
 }
 
-function decideSingle(rawQuestion, { candidate, resume }) {
+function decideByRules(rawQuestion, { candidate, resume }) {
   const q = rawQuestion.toLowerCase().replace(/\s+/g, ' ').trim();
   const totalYears = resume.years;
 
@@ -216,6 +263,23 @@ function optionDays(label) {
  */
 export function chooseOption(answer, options) {
   const labels = options.map((o) => o.toLowerCase().trim());
+
+  // Answer-bank entries name which option to pick, in priority order. A
+  // numeric entry (team size) tries the range options ("5-10") first.
+  if (answer.prefer) {
+    if (answer.number !== undefined) {
+      const byRange = labels.findIndex((l) => {
+        const r = rangeOf(l);
+        return r && answer.number >= r[0] && answer.number <= r[1];
+      });
+      if (byRange !== -1) return byRange;
+    }
+    for (const want of answer.prefer) {
+      const idx = labels.findIndex((l) => l.includes(want.toLowerCase()));
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
 
   if (answer.bool !== undefined) {
     const want = answer.bool ? /^(yes|y|true|sure|i am|i do|i can|i have)\b/ : /^(no|n|false|not)\b/;

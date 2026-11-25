@@ -216,9 +216,31 @@ them from two sources and never makes up an answer:
 | Years in skill X, "experience with X?" | Per-skill years, kept within `skillYearsRange`. A skill not on the resume is **not** answered |
 | Qualification / bachelor's degree | `highestQualification` |
 
-Anything else, such as notice-period buyout or negotiability, "why do you
-want to join us", or a skill you don't have, is **left unanswered and the job
-is not submitted**. The log lists those questions at the end of each run, so
+#### Answer bank
+
+For questions the rules can't work out (reason for change, buyout, bond,
+shifts, travel, APIs built, backend stack, GenAI experience, current
+company, team size, …), `candidate.json` holds an `answerBank`: answers you
+wrote or approved, each with regex `match` patterns and, for multiple-choice
+questions, `options` keywords to pick in priority order:
+
+```json
+{ "id": "backend-tech",
+  "match": ["which backend", "backend technolog"],
+  "answer": "Node.js, along with Python for AI/RAG services.",
+  "options": ["node", "python"] }
+```
+
+Rules are tried first and the bank second. If a multiple-choice question has
+no option matching the entry, such as a bare Yes/No on a bond, it is skipped.
+After editing `candidate.json`, update the `CANDIDATE_PROFILE` secret.
+
+Every question the bot still can't answer is counted in
+`state/unanswered-questions.json` (question text and counts only), committed
+after each run. The most frequent ones are the next answers to add.
+
+Anything else, such as "why do you want to join us", last working day, or a
+skill you don't have, is **left unanswered and the job is not submitted**. The log lists those questions at the end of each run, so
 you can add a rule or a `skillYears` entry. Naukri only submits once the last
 question is answered, so stopping partway sends nothing.
 
