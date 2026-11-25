@@ -6,30 +6,78 @@ const LIMIT = 4000;
 export const telegramConfigured = () =>
   Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
 
-/** Sends one HTML-formatted Telegram message. Throws on an API error. */
-export async function sendTelegram(text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  const body = text.length > LIMIT ? `${text.slice(0, LIMIT)}\n…` : text;
-  // Two attempts: a single dropped connection should not cost a report.
+const stripHtml = (html) =>
+  html
+    .replace(/<a href="([^"]*)">([^<]*)<\/a>/g, '$2 ($1)')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+async function postMessage(text, html) {
+  const res = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: process.env.TELEGRAM_CHAT_ID,
+      text,
+      ...(html ? { parse_mode: 'HTML' } : {}),
+      disable_web_page_preview: true,
+    }),
+  });
+  const json = await res.json().catch(() => ({}));
+  return { ok: Boolean(json.ok), status: res.status, error: json.description ?? `HTTP ${res.status}` };
+}
+
+/**
+ * Sends one HTML-formatted Telegram message (callers keep it under LIMIT —
+ * see packLines). If Telegram rejects the formatting, the same content is
+ * resent as plain text rather than lost. Throws if it still cannot be sent.
+ */
+export async function sendTelegram(html) {
   let lastErr;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: body, parse_mode: 'HTML', disable_web_page_preview: true }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (json.ok) return;
-      lastErr = new Error(`Telegram API: ${json.description ?? `HTTP ${res.status}`}`);
-      if (res.status < 500) break;
+      const r = await postMessage(html, true);
+      if (r.ok) return;
+      if (/parse entities|tag/i.test(r.error)) {
+        const plain = await postMessage(stripHtml(html).slice(0, 4096), false);
+        if (plain.ok) {
+          console.log(`  (sent as plain text — Telegram rejected the formatting: ${r.error})`);
+          return;
+        }
+        lastErr = new Error(`Telegram API: ${plain.error}`);
+      } else {
+        lastErr = new Error(`Telegram API: ${r.error}`);
+      }
+      if (r.status < 500) break;
     } catch (err) {
-      lastErr = err;
+      lastErr = err; // network error: retry once
     }
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   throw lastErr;
+}
+
+/**
+ * Packs lines into as many messages as needed, each under Telegram's limit,
+ * breaking only between lines so no HTML tag is ever cut in half.
+ */
+export function packLines(lines, limit = LIMIT) {
+  const messages = [];
+  let current = '';
+  for (const raw of lines) {
+    const line = raw.length > limit ? stripHtml(raw).slice(0, limit) : raw;
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > limit && current) {
+      messages.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+  if (current.trim()) messages.push(current);
+  return messages;
 }
 
 export { esc };
@@ -61,12 +109,13 @@ export async function sendRunReport({ applied, manual, counts, naukriTotal, runU
   if (manual.length) {
     lines.push('', `⚠️ <b>Apply manually (${manual.length})</b> — questions the bot can't answer truthfully:`);
     for (const j of manual) {
-      lines.push(`• <a href="${esc(j.url)}">${esc(j.title)}</a> — ${esc(j.company)}: <i>${esc(j.note.slice(0, 150))}</i>`);
+      lines.push(`• <a href="${esc(j.url)}">${esc(j.title)}</a> — ${esc(j.company)}: <i>${esc(j.note.slice(0, 120))}</i>`);
     }
   }
   lines.push('', `<i>Bot total counts since ${esc(counts.since)}.</i>` + (runUrl ? ` <a href="${esc(runUrl)}">Run log</a>` : ''));
 
-  await sendTelegram(lines.join('\n'));
-  console.log('✓ Telegram report sent');
+  const messages = packLines(lines);
+  for (const m of messages) await sendTelegram(m);
+  console.log(`✓ Telegram report sent (${messages.length} message${messages.length === 1 ? '' : 's'})`);
   return true;
 }

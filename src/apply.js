@@ -132,6 +132,7 @@ async function main() {
 
   const { browser, context, page } = await openBrowser({ headless, sessionState });
   const appliedJobs = [];
+  let reportFailed = false;
   const manualJobs = [];
   const tally = {};
   const unanswered = [];
@@ -262,7 +263,11 @@ async function main() {
           dryRun,
         });
       } catch (err) {
-        console.log(`::warning::Telegram report failed: ${err.message}`);
+        // Fail the run (after everything else is done and saved) so the
+        // ❌ alert and GitHub's failure email surface it — a report that
+        // silently never arrives is how applications went unseen before.
+        console.log(`::error::Telegram report failed: ${err.message}`);
+        reportFailed = true;
       }
     }
     if (tally['needs-answers']) {
@@ -274,6 +279,8 @@ async function main() {
       // it is what tells you which rule or skillYears entry to add.
       for (const q of unanswered) console.log(`  - ${q}`);
     }
+
+    if (reportFailed) process.exitCode = 1;
 
     // A run that tried and got nothing but errors is a failure worth surfacing;
     // a run that simply found nothing new is not.
