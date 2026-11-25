@@ -87,7 +87,29 @@ export { esc };
  * manual apply, and the running totals. Configured by TELEGRAM_BOT_TOKEN and
  * TELEGRAM_CHAT_ID. Returns false, without throwing, when not configured.
  */
-export async function sendRunReport({ applied, manual, counts, naukriTotal, runUrl, dryRun }) {
+const istDate = (iso) =>
+  new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');
+
+const fmtDay = (d) =>
+  new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+/**
+ * The counts block, shared by the run report and the daily check-in. One
+ * labelled number per line, so the totals cannot be mistaken for missing.
+ */
+export function totalsLine({ today, dailyLimit, total, since, naukriTotal, naukriTotalStale }) {
+  const naukri =
+    naukriTotal == null
+      ? '<i>not read yet</i>'
+      : `<b>${naukriTotal}</b>${naukriTotalStale ? ` <i>(as of ${istDate(naukriTotalStale)} IST)</i>` : ''}`;
+  return [
+    `📊 Applied today: <b>${today}</b>${dailyLimit ? ` of ${dailyLimit}` : ''}`,
+    `🤖 Total applied by bot: <b>${total}</b>${since ? ` (since ${fmtDay(since)})` : ''}`,
+    `🌐 Total applies on Naukri: ${naukri}`,
+  ].join('\n');
+}
+
+export async function sendRunReport({ applied, manual, counts, naukriTotal, naukriTotalStale, runUrl, dryRun }) {
   if (!telegramConfigured()) {
     console.log('Telegram report not sent — TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set.');
     return false;
@@ -95,9 +117,10 @@ export async function sendRunReport({ applied, manual, counts, naukriTotal, runU
 
   const n = applied.length;
   const lines = [
-    `${dryRun ? '🧪 <b>[DRY RUN]</b> would apply to' : '✅ Applied to'} <b>${n} job${n === 1 ? '' : 's'}</b>`,
-    `📊 Today <b>${counts.today}/${counts.dailyLimit}</b> · Bot total <b>${counts.total}</b>` +
-      (naukriTotal != null ? ` · Naukri total <b>${naukriTotal}</b>` : ''),
+    dryRun
+      ? `🧪 <b>[DRY RUN]</b> would apply to <b>${n} job${n === 1 ? '' : 's'}</b> — nothing sent, counts unchanged`
+      : `✅ Applied to <b>${n} job${n === 1 ? '' : 's'}</b> this run`,
+    totalsLine({ ...counts, naukriTotal, naukriTotalStale }),
     '',
     ...applied.map(
       (j, i) =>
@@ -112,7 +135,7 @@ export async function sendRunReport({ applied, manual, counts, naukriTotal, runU
       lines.push(`• <a href="${esc(j.url)}">${esc(j.title)}</a> — ${esc(j.company)}: <i>${esc(j.note.slice(0, 120))}</i>`);
     }
   }
-  lines.push('', `<i>Bot total counts since ${esc(counts.since)}.</i>` + (runUrl ? ` <a href="${esc(runUrl)}">Run log</a>` : ''));
+  if (runUrl) lines.push('', `<a href="${esc(runUrl)}">Run log</a>`);
 
   const messages = packLines(lines);
   for (const m of messages) await sendTelegram(m);

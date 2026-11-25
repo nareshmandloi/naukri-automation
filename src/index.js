@@ -5,7 +5,7 @@ import { buildUniqueResume } from './pdf.js';
 import { refreshResume } from './naukri.js';
 import { loadEnvFile } from './env.js';
 import { readSession } from './session.js';
-import { sendTelegram, telegramConfigured } from './notify.js';
+import { sendTelegram, telegramConfigured, totalsLine } from './notify.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -67,7 +67,7 @@ async function sendCheckIn(fileName, dryRun) {
   const lines = [
     dryRun ? '🧪 <b>[DRY RUN]</b> resume refresh check passed' : `📄 Resume refreshed: <b>${fileName}</b>`,
     counts
-      ? `📊 Auto-apply: <b>${today}</b> today · <b>${counts.total}</b> total since ${counts.since}`
+      ? totalsLine({ ...counts, today, naukriTotalStale: counts.naukriTotalAt ?? null })
       : '📊 Auto-apply: no applications recorded yet',
     '<i>Daily check-in. If this stops arriving, the automation needs attention.</i>',
   ];

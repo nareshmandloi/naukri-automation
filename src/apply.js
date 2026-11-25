@@ -48,19 +48,38 @@ async function writeCounts(c) {
   await writeFile(COUNTS_FILE, `${JSON.stringify(c, null, 2)}\n`, 'utf8');
 }
 
-/** Best effort: Naukri's own "Total applies" figure from the history page. */
+/**
+ * Naukri's own "Total applies" figure. Read from the JSON the history page
+ * loads (matchingRowsCount), which is sturdier than page text, with the
+ * rendered "N Total applies" text as a fallback. Logs why when it fails.
+ */
 async function readNaukriTotal(page) {
+  let fromApi = null;
+  const onResponse = async (r) => {
+    if (!/applyapi\/v\d+\/history\?/.test(r.url())) return;
+    try {
+      const n = Number((await r.json())?.matchingRowsCount);
+      if (Number.isFinite(n)) fromApi = n;
+    } catch {
+      // not JSON — ignore
+    }
+  };
+  page.on('response', onResponse);
   try {
     await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + 20000;
     while (Date.now() < deadline) {
+      if (fromApi != null) return fromApi;
       const text = await page.locator('body').innerText().catch(() => '');
       const m = text.match(/(\d[\d,]*)\s*Total\s*applies/i);
       if (m) return Number(m[1].replace(/,/g, ''));
       await page.waitForTimeout(1000);
     }
-  } catch {
-    // Only used for the report; never fail a run over it.
+    console.log(`  Naukri total not found on ${page.url()} — using the last known figure.`);
+  } catch (err) {
+    console.log(`  Naukri total not read (${err.message.split('\n')[0]}) — using the last known figure.`);
+  } finally {
+    page.off('response', onResponse);
   }
   return null;
 }
@@ -249,7 +268,12 @@ async function main() {
     // One Telegram message per run that applied to something (or, on a
     // manual dry run, would have — which doubles as a test of the setup).
     if (appliedJobs.length) {
-      const naukriTotal = await readNaukriTotal(page);
+      const fresh = await readNaukriTotal(page);
+      if (fresh != null && !dryRun) {
+        counts.naukriTotal = fresh;
+        counts.naukriTotalAt = new Date().toISOString();
+        await writeCounts(counts);
+      }
       const runUrl = process.env.GITHUB_RUN_ID
         ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
         : null;
@@ -258,7 +282,8 @@ async function main() {
           applied: appliedJobs,
           manual: manualJobs,
           counts: { ...counts, dailyLimit },
-          naukriTotal,
+          naukriTotal: fresh ?? counts.naukriTotal ?? null,
+          naukriTotalStale: fresh == null && counts.naukriTotal != null ? counts.naukriTotalAt : null,
           runUrl,
           dryRun,
         });
