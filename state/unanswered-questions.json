@@ -15,6 +15,16 @@
     "lastSeen": "2026-11-26"
   },
   "How many years of experience do you have in Adobe?": {
+    "count": 6,
+    "firstSeen": "2026-11-26",
+    "lastSeen": "2026-11-27"
+  },
+  "How many years of experience do you have in Java 8/11/21?": {
+    "count": 5,
+    "firstSeen": "2026-11-26",
+    "lastSeen": "2026-11-27"
+  },
+  "Preferred Location": {
     "count": 5,
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-27"
@@ -29,12 +39,17 @@
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-26"
   },
-  "How many years of experience do you have in Java 8/11/21?": {
+  "Are you a full stack developer?": {
     "count": 4,
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-27"
   },
-  "Preferred Location": {
+  "Are you available to take an Interview on Saturday (Virtual Round)?": {
+    "count": 4,
+    "firstSeen": "2026-11-26",
+    "lastSeen": "2026-11-27"
+  },
+  "How many years of experience do you have in .Net Core ?": {
     "count": 4,
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-27"
@@ -43,21 +58,6 @@
     "count": 3,
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-26"
-  },
-  "Are you a full stack developer?": {
-    "count": 3,
-    "firstSeen": "2026-11-26",
-    "lastSeen": "2026-11-26"
-  },
-  "Are you available to take an Interview on Saturday (Virtual Round)?": {
-    "count": 3,
-    "firstSeen": "2026-11-26",
-    "lastSeen": "2026-11-27"
-  },
-  "How many years of experience do you have in .Net Core ?": {
-    "count": 3,
-    "firstSeen": "2026-11-26",
-    "lastSeen": "2026-11-27"
   },
   "How many years of experience do you have in Ruby on Rails": {
     "count": 3,
@@ -89,6 +89,16 @@
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-26"
   },
+  "Are you currently residing in Bengaluru?": {
+    "count": 2,
+    "firstSeen": "2026-11-26",
+    "lastSeen": "2026-11-27"
+  },
+  "Current Location": {
+    "count": 2,
+    "firstSeen": "2026-11-27",
+    "lastSeen": "2026-11-27"
+  },
   "Do you have PF for all of your employments?": {
     "count": 1,
     "firstSeen": "2026-11-25",
@@ -104,12 +114,27 @@
     "firstSeen": "2026-11-26",
     "lastSeen": "2026-11-26"
   },
-  "Are you currently residing in Bengaluru?": {
+  "How many years of experience do you have in node js? [options: Skip this question | Skip this question]": {
     "count": 1,
-    "firstSeen": "2026-11-26",
-    "lastSeen": "2026-11-26"
+    "firstSeen": "2026-11-27",
+    "lastSeen": "2026-11-27"
   },
-  "Current Location": {
+  "How many years of experience do you have in Java/ Spring Boot?": {
+    "count": 1,
+    "firstSeen": "2026-11-27",
+    "lastSeen": "2026-11-27"
+  },
+  "How many years of experience do you have in Core Java ?": {
+    "count": 1,
+    "firstSeen": "2026-11-27",
+    "lastSeen": "2026-11-27"
+  },
+  "How many years of experience do you have in Flask?": {
+    "count": 1,
+    "firstSeen": "2026-11-27",
+    "lastSeen": "2026-11-27"
+  },
+  "How many years of exp in fullstack ?": {
     "count": 1,
     "firstSeen": "2026-11-27",
     "lastSeen": "2026-11-27"
